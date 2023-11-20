@@ -4,6 +4,13 @@ require(tidyr)
 require(magrittr)
 require(caret)
 require(vip)
+library(ggplot2)     # for awesome plotting
+library(rpart)       # direct engine for decision tree application
+require(ranger)      # Random Forest   
+library(rpart.plot)  # for plotting decision trees
+library(pdp)         # for feature effects
+require(recipes)
+require(xgboost)
 
 set.seed(300344635)
 #### Data Cleaning 
@@ -51,6 +58,11 @@ cv_log_reg_model <- caret::train(is_strike ~ .,
 
 cv_log_reg_model
 
+
+# https://www.xlstat.com/en/solutions/features/partial-least-squares-regression#:~:text=The%20Partial%20Least%20Squares%20regression,used%20to%20perfom%20a%20regression.
+
+#What is the difference between PCR and PLS regression?
+#The components obtained from the PLS regression,which is based on covariance, are built so that they explain as well as possible Y, while the components of the PCR are built to describe X as well as possible. This explains why the PLS regression outperforms PCR when the target is strongly correlated with a direction in the data that have a low variance. The XLSTAT-PLS software allows partly compensating this drawback of the PCR by allowing the selection of the components that are the most correlated with Y.
 log_reg_pls_model <- caret::train(is_strike ~ .,
                                   data = df, 
                                   method = "glm", 
@@ -92,6 +104,68 @@ log_reg_regularize_model$results %>%
 ggplot(log_reg_regularize_model)
 
 vip(log_reg_regularize_model, num_features = 17, geom = "point")
+
+##### Random Forest section 
+n_features <- length(setdiff(names(df), "is_strike"))
+
+hyper_grid <- expand.grid(
+  mtry = floor(sqrt(n_features) * c(.5, .75, 1.1, 1.25, 1.75)),
+  min.node.size = c(1, 3, 5, 10), 
+  replace = c(TRUE, FALSE),                               
+  sample.fraction = c(.5, .63, .8),
+  miss_classification = NA                                               
+)
+
+model_list <- list() # Initialize a list to store models
+
+# Execute full cartesian grid search
+for(i in seq_len(nrow(hyper_grid))) {
+  # Fit model for ith hyperparameter combination
+  fit2 <- ranger(
+    formula         = is_strike ~ ., 
+    data            = df, 
+    num.trees       = n_features * 10,
+    mtry            = hyper_grid$mtry[i],
+    min.node.size   = hyper_grid$min.node.size[i],
+    replace         = hyper_grid$replace[i],
+    sample.fraction = hyper_grid$sample.fraction[i],
+    verbose         = FALSE,
+    seed            = 300344635,
+    respect.unordered.factors = 'order',
+  )
+  # Store model in the list
+  model_list[[i]] <- fit2
+  
+  # Export OOB error 
+  hyper_grid$miss_classification[i] <- fit2$prediction.error
+}
+
+# Find the model with the lowest misclassification error
+best_model_index <- which.min(hyper_grid$miss_classification)
+best_model <- model_list[[best_model_index]]
+
+best_model
+
+
+#### SVM
+require(kernlab)
+library(e1071)
+svm <- caret::train(
+  is_strike ~ ., 
+  data = df,
+  method = "svmRadial",               
+  preProcess = c("center", "scale"),  
+  trControl = trainControl(method = "cv", number = 10),
+  tuneLength = 5
+)
+
+plot(svm$results$C, svm$results$Accuracy)
+
+
+svm$bestTune
+
+
+confusionMatrix(svm)
 
 
 ###### rough work / Possibly need some this below in other models 
